@@ -1,0 +1,227 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MasterListing API",
+    "version": "1.0.0",
+    "description": "OpenAPI (Swagger) specification for the MasterListing service.\n\nThis describes three Lambda-backed HTTP APIs exposed via API Gateway: \n- **POST /buildMasterSchema** — builds/refreshes a consolidated \"master schema\" from one or more source tables.\n- **POST /insertTableData** — inserts/ingests items for a given table into the DynamoDB table `meta-sync-listing-{stage}`.\n- **GET  /getListingData** — reads paginated items from the DynamoDB table.\n\n> Notes\n> - Update request/response schemas and examples to match your real payloads.\n> - Keys in DynamoDB: **tableName** (PK) and **createdAt** (SK).\n> - Environment: `META_SYNC_LISTING_TABLE` points to `meta-sync-listing-{stage}`."
+  },
+  "servers": [
+    {
+      "url": "https://{restApiId}.execute-api.{region}.amazonaws.com/{stage}",
+      "description": "API Gateway",
+      "variables": {
+        "region": { "default": "eu-west-1" },
+        "stage": { "default": "dev" },
+        "restApiId": { "default": "YOUR_API_ID" }
+      }
+    }
+  ],
+  "tags": [
+    { "name": "Master Schema" },
+    { "name": "Listing Data" }
+  ],
+  "paths": {
+    "/buildMasterSchema": {
+      "post": {
+        "tags": ["Master Schema"],
+        "summary": "Build the master schema from selected source tables",
+        "operationId": "buildMasterSchema",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BuildMasterSchemaRequest" },
+              "examples": {
+                "default": {
+                  "value": {
+                    "tables": ["users", "orders"],
+                    "forceRebuild": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Build completed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildMasterSchemaResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/insertTableData": {
+      "post": {
+        "tags": ["Listing Data"],
+        "summary": "Insert/ingest items for a given table",
+        "operationId": "insertTableData",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InsertTableDataRequest" },
+              "examples": {
+                "default": {
+                  "value": {
+                    "tableName": "users",
+                    "items": [
+                      {
+                        "tableName": "users",
+                        "createdAt": "2025-09-01T10:00:00Z",
+                        "data": { "userId": "u_123", "email": "a@example.com" }
+                      },
+                      {
+                        "tableName": "users",
+                        "createdAt": "2025-09-01T10:05:10Z",
+                        "data": { "userId": "u_124", "email": "b@example.com" }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ingestion results",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/InsertTableDataResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/getListingData": {
+      "get": {
+        "tags": ["Listing Data"],
+        "summary": "Read items for a table (paginated)",
+        "operationId": "getListingData",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tableName",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Logical table name to read from (partition key)."
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 25 },
+            "description": "Max items to return."
+          },
+          {
+            "in": "query",
+            "name": "lastEvaluatedKey",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Opaque cursor for pagination (encode DynamoDB LastEvaluatedKey)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query results",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GetListingDataResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BuildMasterSchemaRequest": {
+        "type": "object",
+        "required": ["tables"],
+        "properties": {
+          "tables": { "type": "array", "items": { "type": "string" } },
+          "forceRebuild": { "type": "boolean", "default": false }
+        }
+      },
+      "BuildMasterSchemaResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "processedTables": { "type": "array", "items": { "type": "string" } },
+          "errors": { "type": "array", "items": { "$ref": "#/components/schemas/ErrorItem" } }
+        }
+      },
+      "InsertTableDataRequest": {
+        "type": "object",
+        "required": ["tableName", "items"],
+        "properties": {
+          "tableName": { "type": "string" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/MetaSyncListingItem" } }
+        }
+      },
+      "InsertTableDataResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "inserted": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "integer", "minimum": 0 },
+          "failedItems": { "type": "array", "items": { "$ref": "#/components/schemas/ErrorItem" } }
+        }
+      },
+      "GetListingDataResponse": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/MetaSyncListingItem" } },
+          "count": { "type": "integer", "minimum": 0 },
+          "lastEvaluatedKey": { "type": "string", "nullable": true }
+        }
+      },
+      "MetaSyncListingItem": {
+        "type": "object",
+        "required": ["tableName", "createdAt"],
+        "properties": {
+          "tableName": { "type": "string", "example": "users" },
+          "createdAt": { "type": "string", "format": "date-time", "example": "2025-09-01T10:00:00Z" },
+          "data": { "type": "object", "additionalProperties": true, "description": "Other attributes for this logical row." }
+        }
+      },
+      "ErrorItem": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string" },
+          "code": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      },
+      "ServerError": {
+        "description": "Unexpected server error",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } }
+      }
+    }
+  }
+}

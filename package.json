@@ -1,0 +1,23 @@
+{
+  "name": "masterListing",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "serverless-dynamodb-local": "^0.2.40",
+    "serverless-offline": "^14.4.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.858.0",
+    "@aws-sdk/lib-dynamodb": "^3.858.0",
+    "serverless": "^4.17.2",
+    "uuid": "^11.1.0"
+  }
+}
