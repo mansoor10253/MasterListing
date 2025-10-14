@@ -1,108 +1,117 @@
 import { DynamoDBClient, CreateTableCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
-const stage = process.env.STAGE
-const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE
-const client = new DynamoDBClient({ region: "eu-west-1" });
+
+const REGION = "eu-west-1";
+const STAGE = process.env.STAGE || "dev";
+const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE;
+
+const ddbClient = new DynamoDBClient({ region: REGION });
 
 export const handler = async (event) => {
     try {
-        const body = JSON.parse(event.body || "{}");
+        const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body || {};
 
-        // 1️⃣ Validation
+        // Step 1: Validate input
         if (!body.tableName || typeof body.tableName !== "string") {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "tableName is required" }),
-            };
-        }
-        if (!Array.isArray(body.attributes) || body.attributes.length === 0) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ error: "attributes array is required" }),
+                body: JSON.stringify({ message: "Missing or invalid field: tableName" }),
             };
         }
 
-        body.tableName = `${body.tableName}-${stage}`;
-        // 2️⃣ Extract keys
+        if (!Array.isArray(body.attributes) || body.attributes.length === 0) {
+            return {
+                statusCode: 400,
+                body: JSON.stringify({ message: "Missing or invalid field: attributes (must be non-empty array)" }),
+            };
+        }
+
+        const targetTableName = `${body.tableName}-${STAGE}`;
+
+        // Step 2: Extract keys
         const partitionKey = body.attributes.find(attr => attr.partionkey === true);
         if (!partitionKey) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "Partition key is required" }),
+                body: JSON.stringify({ message: "Partition key (partionkey: true) is required" }),
             };
         }
 
         const sortKey = body.attributes.find(attr => attr.sortKey === true);
 
-        // 3️⃣ Build AttributeDefinitions
+        // Step 3: Build AttributeDefinitions
         const attributeDefinitions = body.attributes
-            .filter(attr => attr.partionkey || attr.sortKey) // only keys
+            .filter(attr => attr.partionkey || attr.sortKey)
             .map(attr => ({
                 AttributeName: attr.column,
-                AttributeType: attr.type.toUpperCase().startsWith("STRING") ? "S" :
-                    attr.type.toUpperCase().startsWith("NUMBER") ? "N" : "B"
+                AttributeType: attr.type?.toUpperCase().startsWith("STRING") ? "S" :
+                    attr.type?.toUpperCase().startsWith("NUMBER") ? "N" : "B",
             }));
 
-        // 4️⃣ Build KeySchema
+        // Step 4: Build KeySchema
         const keySchema = [
-            { AttributeName: partitionKey.column, KeyType: "HASH" }
+            { AttributeName: partitionKey.column, KeyType: "HASH" },
         ];
         if (sortKey) {
             keySchema.push({ AttributeName: sortKey.column, KeyType: "RANGE" });
         }
 
-        // 5️⃣ Create Table
-        const params = {
-            TableName: body.tableName,
+        // Step 5: Create the DynamoDB table
+        const createTableParams = {
+            TableName: targetTableName,
             AttributeDefinitions: attributeDefinitions,
             KeySchema: keySchema,
-            BillingMode: "PAY_PER_REQUEST"
+            BillingMode: "PAY_PER_REQUEST",
         };
 
-        await client.send(new CreateTableCommand(params));
+        console.log("Creating Table with params:", JSON.stringify(createTableParams, null, 2));
+        await ddbClient.send(new CreateTableCommand(createTableParams));
 
+        // Step 6: Insert into meta-sync table
         const createdAt = new Date().toISOString();
         const allFields = JSON.stringify(body.attributes);
         const requiredFields = JSON.stringify(
             body.attributes.filter(attr => attr.required === true)
         );
 
-        const metaParams = {
+        const metaItemParams = {
             TableName: META_SYNC_LISTING_TABLE,
             Item: {
-                tableName: { S: body.tableName },   // PK
-                createdAt: { S: createdAt },        // SK
+                tableName: { S: targetTableName },
+                createdAt: { S: createdAt },
                 allFields: { S: allFields },
                 requiredFields: { S: requiredFields },
                 status: { N: "1" },
-                updatedAt: { S: createdAt }
-            }
+                updatedAt: { S: createdAt },
+            },
         };
 
-        await client.send(new PutItemCommand(metaParams));
+        await ddbClient.send(new PutItemCommand(metaItemParams));
 
-        // 6️⃣ Return success
+        // Step 7: Return success
         return {
             statusCode: 200,
             headers: {
-                "Access-Control-Allow-Origin": "*", // ← allow all origins
-                "Access-Control-Allow-Credentials": true, // ← allow cookies if needed
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": true,
             },
             body: JSON.stringify({
                 message: "Table created successfully",
-                tableName: body.tableName,
+                tableName: targetTableName,
                 defaults: {
                     status: 1,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                }
-            })
+                    createdAt,
+                    updatedAt: createdAt,
+                },
+            }),
         };
-
     } catch (error) {
-        console.error("❌ Error:", error);
+        console.error("Error creating table:", error);
         return {
             statusCode: 500,
-            body: JSON.stringify({ error: "Internal Server Error" }),
+            body: JSON.stringify({
+                message: "Internal server error",
+                error: error.message || error,
+            }),
         };
     }
 };

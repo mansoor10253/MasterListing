@@ -1,118 +1,138 @@
 import { DynamoDBClient, QueryCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
-const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE
-const stage = process.env.STAGE || "dev";
-const client = new DynamoDBClient({ region: "eu-west-1" });
+
+const REGION = "eu-west-1";
+const STAGE = process.env.STAGE || "dev";
+const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE;
+
+const ddbClient = new DynamoDBClient({ region: REGION });
 
 export const handler = async (event) => {
     try {
-        const body = JSON.parse(event.body || "{}");
+        const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body || {};
 
-        // 1️⃣ tableName validation
+        // Step 1: Validate required field: tableName
         if (!body.tableName || typeof body.tableName !== "string") {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "tableName is required" }),
+                body: JSON.stringify({ message: "Missing or invalid field: tableName" }),
             };
         }
 
-        const targetTableName = `${body.tableName}-${stage}`;
-        console.log("targetTableName********", targetTableName);
-        console.log("META_SYNC_LISTING_TABLE********", META_SYNC_LISTING_TABLE);
-        // 2️⃣ Fetch metadata from meta-sync-listing-<stage>
-        // Since there's only one record per tableName, we use a GetItem with static createdAt
-        const metaResp = await client.send(new QueryCommand({
-            TableName: "meta-sync-listing-dev",
-            KeyConditionExpression: "tableName = :t",
-            ExpressionAttributeValues: {
-                ":t": { S: targetTableName }
-            }
-        }));
+        const targetTableName = `${body.tableName}-${STAGE}`;
 
-        console.log("metaResp:", metaResp);
-        const metaItem = metaResp.Items && metaResp.Items.length > 0 ? metaResp.Items[0] : null;
+        // Step 2: Fetch metadata from meta-sync table
+        const metaResp = await ddbClient.send(
+            new QueryCommand({
+                TableName: META_SYNC_LISTING_TABLE,
+                KeyConditionExpression: "tableName = :t",
+                ExpressionAttributeValues: {
+                    ":t": { S: targetTableName },
+                },
+            })
+        );
+
+        console.log("MetaSync Query Response:", metaResp);
+        const metaItem = metaResp.Items?.length ? metaResp.Items[0] : null;
+
         if (!metaItem) {
             return {
                 statusCode: 400,
                 body: JSON.stringify({
-                    error: "This tableName is not in DynamoDB, please give the correct table name"
+                    message: `Table '${targetTableName}' not found in meta-sync listing. Please verify the table name.`,
                 }),
             };
         }
-        console.log("metaItem************",metaItem);
-        
-        const requiredFields = JSON.parse(metaItem.requiredFields.S || "[]");
+
+        // Step 3: Validate required fields defined in meta
+        const requiredFields = JSON.parse(metaItem.requiredFields?.S || "[]");
+
         for (const field of requiredFields) {
             const fieldName = field.column;
             const expectedType = field.type.toLowerCase();
 
+            // Missing field
             if (!(fieldName in body)) {
                 return {
                     statusCode: 400,
                     body: JSON.stringify({
-                        error: `Field '${fieldName}' is required`
+                        message: `Missing required field: '${fieldName}'`,
                     }),
                 };
             }
 
-            const actualValue = body[fieldName];
-            if (!validateType(actualValue, expectedType)) {
+            // Type mismatch
+            if (!validateType(body[fieldName], expectedType)) {
                 return {
                     statusCode: 400,
                     body: JSON.stringify({
-                        error: `Field '${fieldName}' must be of type ${expectedType}`
+                        message: `Field '${fieldName}' must be of type '${expectedType}'`,
                     }),
                 };
             }
         }
 
-        // 4️⃣ Insert into target table
+        // Step 4: Prepare item for insertion
         const nowEpoch = Date.now();
         const insertItem = {
             id: { S: body.id || uuidv4() },
             status: { N: "1" },
             createdAt: { N: nowEpoch.toString() },
-            updatedAt: { N: nowEpoch.toString() }
+            updatedAt: { N: nowEpoch.toString() },
         };
 
+        // Include all other fields except excluded ones
         for (const [key, value] of Object.entries(body)) {
             if (key === "tableName" || key === "metaCreatedAt") continue;
             insertItem[key] = formatDynamoValue(value);
         }
 
-        await client.send(new PutItemCommand({
-            TableName: targetTableName,
-            Item: insertItem
-        }));
+        // Step 5: Insert into target table
+        await ddbClient.send(
+            new PutItemCommand({
+                TableName: targetTableName,
+                Item: insertItem,
+            })
+        );
 
+        // Step 6: Return success response
         return {
             statusCode: 200,
             headers: {
-                "Access-Control-Allow-Origin": "*", // ← allow all origins
-                "Access-Control-Allow-Credentials": true, // ← allow cookies if needed
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": true,
             },
-            body: JSON.stringify({ message: "Record inserted successfully" })
+            body: JSON.stringify({ message: "Record inserted successfully" }),
         };
-
     } catch (error) {
-        console.error("❌ Error:", error);
+        console.error("Error inserting table data:", error);
         return {
             statusCode: 500,
-            body: JSON.stringify({ error: "Internal Server Error" }),
+            body: JSON.stringify({
+                message: "Internal server error",
+                error: error.message || error,
+            }),
         };
     }
 };
 
+// Utility: Type validation
 function validateType(value, expectedType) {
     if (expectedType === "string") return typeof value === "string";
     if (expectedType === "number") return typeof value === "number";
     if (expectedType === "date") return !isNaN(Date.parse(value));
+    if (expectedType === "boolean") return typeof value === "boolean";
     return true;
 }
 
+// Utility: Format values for DynamoDB
 function formatDynamoValue(value) {
     if (typeof value === "string") return { S: value };
     if (typeof value === "number") return { N: value.toString() };
     if (typeof value === "boolean") return { BOOL: value };
-    return { S: JSON.stringify(value) };
+    if (Array.isArray(value)) return { L: value.map((v) => formatDynamoValue(v)) };
+    if (typeof value === "object" && value !== null)
+        return { M: Object.fromEntries(Object.entries(value).map(([k, v]) => [k, formatDynamoValue(v)])) };
+
+    return { S: JSON.stringify(value) }; // fallback
 }

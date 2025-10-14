@@ -1,5 +1,5 @@
 service: MasterListing
-frameworkVersion: "4"
+frameworkVersion: "3"
 
 provider:
   name: aws
@@ -9,12 +9,19 @@ provider:
 
   iamRoleStatements:
     - Effect: Allow
-      Action: "*"
-      Resource: "*"
- 
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:UpdateItem
+      Resource:
+        - arn:aws:dynamodb:${self:provider.region}:*:table/meta-sync-listing-${self:provider.stage}
+
   environment:
     META_SYNC_LISTING_TABLE: meta-sync-listing-${self:provider.stage}
     STAGE: ${opt:stage, 'dev'}
+    REGION: ${self:provider.region}
 
 package:
   excludeDevDependencies: true
@@ -26,7 +33,8 @@ functions:
       - http:
           path: /buildMasterSchema
           method: post
-          cors: true
+          cors:
+            origin: "*"
 
   insertTableData:
     handler: handlers/insertTableData.handler
@@ -34,36 +42,21 @@ functions:
       - http:
           path: /insertTableData
           method: post
-          cors: true        
-  
+          cors:
+            origin: "*"
+
   getListingData:
     handler: handlers/getListingData.handler
     events:
       - http:
           path: /getListingData
           method: get
-          cors: true
+          cors:
+            origin: "*"
 
-  openapi:
-    handler: handlers/docs.openapi
-    events:
-        - http:
-            path: /openapi.json
-            method: get
-            cors: true
-
-  docs:
-    handler: handlers/docs.docs
-    events:
-      - http:
-          path: /docs
-          method: get
-          cors: true
-        
 resources:
   Resources:
-    
-    UserCouponTable:
+    MasterListingTable:
       Type: AWS::DynamoDB::Table
       Properties:
         TableName: meta-sync-listing-${self:provider.stage}
@@ -79,14 +72,16 @@ resources:
           - AttributeName: createdAt
             KeyType: RANGE
 
-
 custom:
   esbuild:
     bundle: true
-    minify: false
+    minify: true
     sourcemap: false
     target: node20
     platform: node
+    concurrency: 10
+    exclude:
+      - aws-sdk
 
   serverless-offline:
     watch:
@@ -94,10 +89,5 @@ custom:
         - node_modules/**
 
 plugins:
+  - serverless-esbuild
   - serverless-offline
-
-build:
-  esbuild: true
-
-
-
