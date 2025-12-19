@@ -1,7 +1,7 @@
 import { DynamoDBClient, ScanCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
-const REGION = "eu-west-1";
+const REGION = process.env.REGION;
 const STAGE = process.env.STAGE || "dev";
 const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE;
 

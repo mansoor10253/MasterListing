@@ -1,7 +1,7 @@
 import { DynamoDBClient, QueryCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 
-const REGION = "eu-west-1";
+const REGION = process.env.REGION;
 const STAGE = process.env.STAGE || "dev";
 const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE;
 

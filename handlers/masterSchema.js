@@ -1,6 +1,6 @@
 import { DynamoDBClient, CreateTableCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 
-const REGION = "eu-west-1";
+const REGION = process.env.REGION;
 const STAGE = process.env.STAGE || "dev";
 const META_SYNC_LISTING_TABLE = process.env.META_SYNC_LISTING_TABLE;
 
